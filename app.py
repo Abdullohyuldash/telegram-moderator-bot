@@ -2,18 +2,12 @@ import asyncio
 import logging
 import os
 import sys
-import threading
 
-import gradio as gr
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 
 from bot import on_startup, router
-from config import BOT_TOKEN, LOG_CHANNEL_ID
-
-try:
-    from filters.text_filter import BAD_WORDS_SET
-except ImportError:
-    from text_filter import BAD_WORDS_SET
+from config import BOT_TOKEN
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,56 +16,69 @@ logging.basicConfig(
 logger = logging.getLogger("render_app")
 
 
-def run_telegram_bot_loop() -> None:
-    """Telegram bot dispatcherini alohida fonda (thread) ishga tushiradi."""
+async def handle_health_check(request: web.Request) -> web.Response:
+    """Render.com uchun 200 OK qaytaruvchi yengil status sahifasi."""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="uz">
+    <head>
+        <meta charset="UTF-8">
+        <title>Telegram Moderatsiya Boti</title>
+        <style>
+            body { font-family: sans-serif; background: #0f172a; color: white; text-align: center; padding: 60px 20px; }
+            .card { max-width: 500px; margin: 0 auto; background: #1e293b; padding: 30px; border-radius: 12px; border: 1px solid #334155; }
+            .badge { background: #10b981; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; display: inline-block; }
+            h1 { font-size: 22px; margin: 15px 0 10px; }
+            p { color: #94a3b8; font-size: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="badge">● 24/7 ISHLAMOQDA</div>
+            <h1>🛡 Telegram Moderatsiya Boti Faol</h1>
+            <p>Neyrotarmoq (ONNX) va so'kinish filtri serverda uzluksiz xizmat ko'rsatmoqda.</p>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html_content, content_type="text/html")
+
+
+async def main() -> None:
     token = BOT_TOKEN or os.getenv("BOT_TOKEN", "")
     if not token or "your_telegram_bot_token_here" in token:
         logger.error(
             "BOT_TOKEN topilmadi! Iltimos, Render Environment bo'limida BOT_TOKEN ni kiriting."
         )
-        return
+        sys.exit(1)
 
-    async def _async_main() -> None:
-        try:
-            logger.info("Bot initsializatsiyasi boshlanmoqda...")
-            await on_startup()
+    # 1. SQLite baza va ONNX neyrotarmoq modellarini yuklash
+    await on_startup()
 
-            bot = Bot(token=token)
-            dp = Dispatcher()
-            dp.include_router(router)
+    bot = Bot(token=token)
+    dp = Dispatcher()
+    dp.include_router(router)
+    await bot.delete_webhook(drop_pending_updates=True)
 
-            logger.info("Telegram Moderatsiya Boti 24/7 ishga tushdi (Polling)...")
-            await bot.delete_webhook(drop_pending_updates=True)
-            await dp.start_polling(bot)
-        except Exception as exc:
-            logger.error("Bot ishida kutilmagan xatolik: %s", exc, exc_info=True)
+    # 2. Render talab qiladigan aiohttp veb-serverini bir vaqtda ishga tushirish (0.0.0.0:10000)
+    app = web.Application()
+    app.router.add_get("/", handle_health_check)
+    app.router.add_get("/health", handle_health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-    asyncio.run(_async_main())
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Veb-server 0.0.0.0:%d portida muvaffaqiyatli ochildi.", port)
 
-
-# 1. Telegram botni fonga olib, uzluksiz ishga tushiramiz
-bot_thread = threading.Thread(target=run_telegram_bot_loop, daemon=True)
-bot_thread.start()
-
-
-# 2. Render 24/7 "Live" holatida ushlab turishi uchun Gradio veb-interfeysi
-with gr.Blocks(title="Telegram Moderatsiya Boti") as demo:
-    gr.Markdown(
-        """
-        # 🛡 Telegram Moderatsiya Boti (24/7 Bepul Serverda)
-        
-        ### ✅ Holat: Faol ishlamoqda
-        - **Neyrotarmoq (ONNX):** NudeNet + NSFWJS (CPU tahlil)
-        - **Matn filtri:** O'zbek va rus tillari (4 900+ so'z shakllari)
-        - **Nazorat kanali (Audit Log):** Ulangan
-        
-        *Ushbu bot Render.com bepul serverida 24 soat uzluksiz ishlaydi.*
-        """
-    )
+    # 3. Telegram Pollingni asosiy oqimda to'liq xavfsiz yurgizish
+    logger.info("Telegram Moderatsiya Boti 24/7 ishga tushdi (Polling)...")
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    # Render o'zining PORT (10000) o'zgaruvchisini taqdim etadi
-    port = int(os.getenv("PORT", 10000))
-    logger.info("Veb-server porti: %d", port)
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot to'xtatildi.")
