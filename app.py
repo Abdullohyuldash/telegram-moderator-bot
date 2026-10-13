@@ -9,13 +9,17 @@ from aiogram import Bot, Dispatcher
 
 from bot import on_startup, router
 from config import BOT_TOKEN, LOG_CHANNEL_ID
-from filters.text_filter import BAD_WORDS_SET
+
+try:
+    from filters.text_filter import BAD_WORDS_SET
+except ImportError:
+    from text_filter import BAD_WORDS_SET
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("huggingface_gradio_app")
+logger = logging.getLogger("render_app")
 
 
 def run_telegram_bot_loop() -> None:
@@ -23,7 +27,7 @@ def run_telegram_bot_loop() -> None:
     token = BOT_TOKEN or os.getenv("BOT_TOKEN", "")
     if not token or "your_telegram_bot_token_here" in token:
         logger.error(
-            "BOT_TOKEN topilmadi! Iltimos, Hugging Face Settings -> Secrets bo'limida BOT_TOKEN ni kiriting."
+            "BOT_TOKEN topilmadi! Iltimos, Render Environment bo'limida BOT_TOKEN ni kiriting."
         )
         return
 
@@ -50,7 +54,7 @@ bot_thread = threading.Thread(target=run_telegram_bot_loop, daemon=True)
 bot_thread.start()
 
 
-# 2. Hugging Face 24/7 yashil "Running" holatida ushlab turishi uchun bepul Gradio veb-interfeysi
+# 2. Render 24/7 "Live" holatida ushlab turishi uchun Gradio veb-interfeysi
 with gr.Blocks(title="Telegram Moderatsiya Boti") as demo:
     gr.Markdown(
         """
@@ -61,10 +65,13 @@ with gr.Blocks(title="Telegram Moderatsiya Boti") as demo:
         - **Matn filtri:** O'zbek va rus tillari (4 900+ so'z shakllari)
         - **Nazorat kanali (Audit Log):** Ulangan
         
-        *Ushbu bot Hugging Face Spaces bepul serverida 24 soat uzluksiz ishlaydi.*
+        *Ushbu bot Render.com bepul serverida 24 soat uzluksiz ishlaydi.*
         """
     )
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    # Render o'zining PORT (10000) o'zgaruvchisini taqdim etadi
+    port = int(os.getenv("PORT", 10000))
+    logger.info("Veb-server porti: %d", port)
+    demo.launch(server_name="0.0.0.0", server_port=port)
